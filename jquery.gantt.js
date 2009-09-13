@@ -1,3 +1,5 @@
+$.MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 $.sameDay = function (date1, date2) {
 	return date1.getDate() == date2.getDate() && date1.getMonth() == date2.getMonth() && date1.getFullYear() == date2.getFullYear();
 };
@@ -16,25 +18,52 @@ $.prefixLeadingZeroes = function (number, digits) {
 		return number;
 };
 
-$.addGanttColumn = function (date, headers, rows, data) {
-	var index, current, className, cell;
+$.addGanttColumn = function (date, headers, rows, data, interval, cellClickHandler) {
+	var index, current, className, cell, day_interval, next_date, header, add_column;
 	
-	headers.push((date.getMonth() + 1) + '/' + date.getDate());
+	day_interval = interval && (interval <= $.MS_PER_DAY);
 	
-	for (index in data) {
+	header = (date.getMonth() + 1) + '/' + date.getDate();
+
+	next_date = new Date(date.getTime() + interval);
+	
+	if (!day_interval)
+		header += '-' + (next_date.getMonth() + 1) + '/' + next_date.getDate();
+	
+	headers.push(header);
+	
+	for (index in data) {		     
 		current = data[index];
 		
 		cell = $(document.createElement('td'));
+		cell.data('date', date);
+		cell.data('next_date', next_date);
+
+		className = 'gantt_unscheduled';
 		
-		if ($.sameDay(current.start_date, date) || $.sameDay(current.stop_date, date) || (date >= current.start_date && date <= current.stop_date)) {
-			className = 'gantt_scheduled';
-			
-			cell.attr('title', data[index].name + '<br />' + $.prefixLeadingZeroes(current.start_date.getHours()) + ':' + $.prefixLeadingZeroes(current.start_date.getMinutes()) + ' ' + current.start_date.getMonth() + '/' + current.start_date.getDate() + '/' + current.start_date.getFullYear() + ' - ' + $.prefixLeadingZeroes(current.stop_date.getHours()) + ':' + $.prefixLeadingZeroes(current.stop_date.getMinutes()) + ' ' + current.stop_date.getMonth() + '/' + current.stop_date.getDate() + '/' + current.stop_date.getFullYear());
-			cell.simpletooltip();
-		} else {
-			className = 'gantt_unscheduled';
+		add_column = false;
+		
+		if (day_interval) {
+			if ($.sameDay(current.start_date, date) || $.sameDay(current.stop_date, date) || ((date >= current.start_date) && (date <= current.stop_date)))
+				add_column = true;
+		} else { // different comparison for ranges		
+			if ((current.start_date < next_date) && (current.stop_date >= date))
+				add_column = true;
 		}
 		
+		if (add_column) {
+			className = 'gantt_scheduled';
+			
+			cell.attr('title', current.name + '<br />' + $.prefixLeadingZeroes(current.start_date.getHours()) + ':' + $.prefixLeadingZeroes(current.start_date.getMinutes()) + ' ' + (current.start_date.getMonth() + 1) + '/' + current.start_date.getDate() + '/' + current.start_date.getFullYear() + ' - ' + $.prefixLeadingZeroes(current.stop_date.getHours()) + ':' + $.prefixLeadingZeroes(current.stop_date.getMinutes()) + ' ' + (current.stop_date.getMonth() + 1) + '/' + current.stop_date.getDate() + '/' + current.stop_date.getFullYear());
+			cell.simpletooltip();
+			
+			if (cellClickHandler) {
+				cell.data('stage', current);
+				
+				cell.click(function () { cellClickHandler($(this).data('stage')); });
+			}
+		}
+
 		cell.addClass(className).appendTo(rows[index]);
 	}
 };
@@ -52,11 +81,11 @@ $.tableHeaders = function (table) {
 	return headers;
 };
 
-$.equalizeColumns = function (table) {
+$.equalizeColumns = function (table, width) {
 	var widest, headers;
 	
 	table = $(table);
-	table.css('width', '100%');
+	table.css('width', width ? Math.floor(width * 100) + '%' : '100%');
 	table.css('table-layout', 'fixed');
 	
 	headers = $.tableHeaders(table);
@@ -77,11 +106,11 @@ $.equalizeColumns = function (table) {
 	return table;
 };
 
-$.fitColumns = function (table) {
+$.fitColumns = function (table, width) {
 	var headers, pct;
 	
 	table = $(table);
-	table.css('width', '100%');
+	table.css('width', width ? Math.floor(width * 100) + '%' : '100%');
 	table.css('table-layout', 'fixed');
 	
 	headers = $.tableHeaders(table);
@@ -121,8 +150,8 @@ $.mergeCells = function (table, selector, endcaps) {
 	});
 };
 
-$.gantt = function (table, merge, endcaps) {
-	var chart, body, data, first, last, header, date, millisecondsPerDay, rows, index, width, leftcap, rightcap;
+$.gantt = function (table, merge, endcaps, width, maxcells, mindate, maxdate, cellClickHandler) {
+	var chart, body, data, first, last, header, date, rows, index, width, leftcap, rightcap, days, daysPerCell, interval;
 	
 	table = $(table || 'table'); // make sure it's a jquery object
 	
@@ -142,15 +171,23 @@ $.gantt = function (table, merge, endcaps) {
 		stage = { name: me.find('.stage_name:first').text(), start_date: new Date(Date.parse(me.find('.stage_start:first').text())), stop_date: new Date(Date.parse(me.find('.stage_stop:first').text())) };
 		data.push(stage);
 		
-		if (stage.start_date < first)
+		if (!mindate && stage.start_date < first)
 			first = stage.start_date;
 		
-		if (stage.stop_date > last)
+		if (!maxdate && stage.stop_date > last)
 			last = stage.stop_date;
 	});
 	
+	if (mindate)
+		first = mindate;
+	
+	if (maxdate)
+		last = maxdate;
+	
 	chart = $(document.createElement('table'));
 	chart.addClass('gantt-chart');
+	chart.hide();
+	table.replaceWith(chart);
 	
 	header = $(document.createElement('thead'));
 	
@@ -162,15 +199,25 @@ $.gantt = function (table, merge, endcaps) {
 	for (index in data)
 		rows[index] = $(document.createElement('tr')).addClass('gantt_row gantt_' + (index % 5) + 'th');
 
-	millisecondsPerDay = 24 * 60 * 60 * 1000;
-	date = first;
+	date = new Date(first.getFullYear(), first.getMonth(), first.getDate());
 	
-	$.addGanttColumn(date, headers, rows, data);
+	if (maxcells) {
+		total_days = ((new Date(last.getFullYear(), last.getMonth(), last.getDate(), 23, 59, 59).getTime() - new Date(first.getFullYear(), first.getMonth(), first.getDate()).getTime()) / $.MS_PER_DAY) + 1;
+		daysPerCell = Math.floor(total_days / maxcells);
+		interval = daysPerCell * $.MS_PER_DAY;
+	} else {
+		interval = $.MS_PER_DAY;
+	}
 	
-	while (!$.sameDay(date, last) || $.sameDay(date, first)) {
-		date = new Date(date.getTime() + millisecondsPerDay);
+	$.addGanttColumn(date, headers, rows, data, interval, cellClickHandler);
+
+	while ((date < last) || $.sameDay(date, last)) {
+		date = new Date(date.getTime() + interval);
 		
-		$.addGanttColumn(date, headers, rows, data);
+		$.addGanttColumn(date, headers, rows, data, interval, cellClickHandler);
+		
+		if (headers.length == maxcells)
+			break;
 	}
 	
 	header = $(document.createElement('tr')).appendTo(header);
@@ -185,10 +232,7 @@ $.gantt = function (table, merge, endcaps) {
 		
 	body.appendTo(chart);
 	
-	chart.hide();
-	table.replaceWith(chart);
-	width = $.fitColumns(chart); //$.equalizeColumns(chart);
-	chart.find('th:odd').text('');
+	$.fitColumns(chart, width);
 	
 	if (merge)
 		$.mergeCells(chart, '.gantt_scheduled', endcaps);
@@ -223,4 +267,29 @@ $.gantt = function (table, merge, endcaps) {
 	);
 	
 	chart.show();
+	
+	body.find('td.gantt_scheduled').each(function (i, cell) {
+		var range, innerRange, next_date, current, date, interval;
+		
+		cell = $(cell);
+		
+		current = cell.data('stage');
+		date = cell.data('date');
+		next_date = cell.data('next_date');
+		
+		range = $(document.createElement('div'));
+		
+		range.addClass('gantt_range');
+		
+		innerRange = Math.min(next_date.getTime(), current.stop_date.getTime()) - Math.max(date.getTime(), current.start_date.getTime());
+		interval = next_date.getTime() - date.getTime();
+		
+		range.width(Math.round((cell.innerWidth() * innerRange) / interval));
+		range.height(cell.innerHeight());
+		range.css('margin-left', Math.round(((Math.max(current.start_date.getTime(), date.getTime()) - date.getTime()) * cell.innerWidth()) / interval) + 'px');
+		
+		range.appendTo(cell);
+	});
+	
+	return chart;
 };
