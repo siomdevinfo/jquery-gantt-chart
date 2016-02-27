@@ -1,0 +1,1 @@
+Transforms a table of stage names and start and stop date and times into a Gantt chart for visually representing events that span times greater than a day. Useful for implementing scheduling interfaces.
